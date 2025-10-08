@@ -618,52 +618,67 @@ class ImageUntile:
     CATEGORY = "essentials/image manipulation"
 
     def execute(self, tiles, overlap_x, overlap_y, rows, cols):
-        tile_h, tile_w = tiles.shape[1:3]
-        tile_h -= overlap_y
-        tile_w -= overlap_x
+        total_tiles = rows * cols
+        channels = tiles.shape[3]
+
+        tile_full_h, tile_full_w = tiles.shape[1:3]
+        tile_h = tile_full_h - overlap_y
+        tile_w = tile_full_w - overlap_x
         out_w = cols * tile_w
         out_h = rows * tile_h
 
-        out = torch.zeros((1, out_h, out_w, tiles.shape[3]), device=tiles.device, dtype=tiles.dtype)
+        frames = max(1, tiles.shape[0] // max(1, total_tiles))
 
-        for i in range(rows):
-            for j in range(cols):
-                y1 = i * tile_h
-                x1 = j * tile_w
+        if frames * total_tiles != tiles.shape[0]:
+            raise ValueError(
+                f"Unexpected tiles shape: {tiles.shape[0]} entries for {rows}x{cols} tiles"
+            )
 
-                if i > 0:
-                    y1 -= overlap_y
-                if j > 0:
-                    x1 -= overlap_x
+        tiles = tiles.reshape(total_tiles, frames, tile_full_h, tile_full_w, channels).permute(1, 0, 2, 3, 4)
 
-                y2 = y1 + tile_h + overlap_y
-                x2 = x1 + tile_w + overlap_x
+        out = torch.zeros((frames, out_h, out_w, channels), device=tiles.device, dtype=tiles.dtype)
 
-                if y2 > out_h:
-                    y2 = out_h
-                    y1 = y2 - tile_h - overlap_y
-                if x2 > out_w:
-                    x2 = out_w
-                    x1 = x2 - tile_w - overlap_x
-                
-                mask = torch.ones((1, tile_h+overlap_y, tile_w+overlap_x), device=tiles.device, dtype=tiles.dtype)
+        for tile_idx in range(total_tiles):
+            i = tile_idx // cols
+            j = tile_idx % cols
 
-                # feather the overlap on top
-                if i > 0 and overlap_y > 0:
-                    mask[:, :overlap_y, :] *= torch.linspace(0, 1, overlap_y, device=tiles.device, dtype=tiles.dtype).unsqueeze(1)
-                # feather the overlap on bottom
-                #if i < rows - 1:
-                #    mask[:, -overlap_y:, :] *= torch.linspace(1, 0, overlap_y, device=tiles.device, dtype=tiles.dtype).unsqueeze(1)
-                # feather the overlap on left
-                if j > 0 and overlap_x > 0:
-                    mask[:, :, :overlap_x] *= torch.linspace(0, 1, overlap_x, device=tiles.device, dtype=tiles.dtype).unsqueeze(0)
-                # feather the overlap on right
-                #if j < cols - 1:
-                #    mask[:, :, -overlap_x:] *= torch.linspace(1, 0, overlap_x, device=tiles.device, dtype=tiles.dtype).unsqueeze(0)
-                
-                mask = mask.unsqueeze(-1).repeat(1, 1, 1, tiles.shape[3])
-                tile = tiles[i * cols + j] * mask
-                out[:, y1:y2, x1:x2, :] = out[:, y1:y2, x1:x2, :] * (1 - mask) + tile
+            y1 = i * tile_h
+            x1 = j * tile_w
+
+            if i > 0:
+                y1 -= overlap_y
+            if j > 0:
+                x1 -= overlap_x
+
+            y2 = y1 + tile_h + overlap_y
+            x2 = x1 + tile_w + overlap_x
+
+            if y2 > out_h:
+                y2 = out_h
+                y1 = y2 - tile_h - overlap_y
+            if x2 > out_w:
+                x2 = out_w
+                x1 = x2 - tile_w - overlap_x
+
+            mask = torch.ones((1, tile_full_h, tile_full_w), device=tiles.device, dtype=tiles.dtype)
+
+            # feather the overlap on top
+            if i > 0 and overlap_y > 0:
+                mask[:, :overlap_y, :] *= torch.linspace(0, 1, overlap_y, device=tiles.device, dtype=tiles.dtype).unsqueeze(1)
+            # feather the overlap on bottom
+            #if i < rows - 1:
+            #    mask[:, -overlap_y:, :] *= torch.linspace(1, 0, overlap_y, device=tiles.device, dtype=tiles.dtype).unsqueeze(1)
+            # feather the overlap on left
+            if j > 0 and overlap_x > 0:
+                mask[:, :, :overlap_x] *= torch.linspace(0, 1, overlap_x, device=tiles.device, dtype=tiles.dtype).unsqueeze(0)
+            # feather the overlap on right
+            #if j < cols - 1:
+            #    mask[:, :, -overlap_x:] *= torch.linspace(1, 0, overlap_x, device=tiles.device, dtype=tiles.dtype).unsqueeze(0)
+
+            mask = mask.unsqueeze(-1).repeat(1, 1, 1, channels)
+
+            tile = tiles[:, tile_idx] * mask
+            out[:, y1:y2, x1:x2, :] = out[:, y1:y2, x1:x2, :] * (1 - mask) + tile
         return(out, )
 
 class ImageSeamCarving:
